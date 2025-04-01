@@ -2,15 +2,25 @@
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
 
-__device__ const float gaussian_kernel[3][3] = {
-    {1.0f/16.0f, 2.0f/16.0f, 1.0f/16.0f},
-    {2.0f/16.0f, 4.0f/16.0f, 2.0f/16.0f},
-    {1.0f/16.0f, 2.0f/16.0f, 1.0f/16.0f}
+// 10x10 Gaussian kernel with normalized weights
+__device__ const float gaussian_kernel[10][10] = {
+    {0.0001f, 0.0002f, 0.0004f, 0.0006f, 0.0008f, 0.0008f, 0.0006f, 0.0004f, 0.0002f, 0.0001f},
+    {0.0002f, 0.0004f, 0.0008f, 0.0012f, 0.0016f, 0.0016f, 0.0012f, 0.0008f, 0.0004f, 0.0002f},
+    {0.0004f, 0.0008f, 0.0016f, 0.0024f, 0.0032f, 0.0032f, 0.0024f, 0.0016f, 0.0008f, 0.0004f},
+    {0.0006f, 0.0012f, 0.0024f, 0.0036f, 0.0048f, 0.0048f, 0.0036f, 0.0024f, 0.0012f, 0.0006f},
+    {0.0008f, 0.0016f, 0.0032f, 0.0048f, 0.0064f, 0.0064f, 0.0048f, 0.0032f, 0.0016f, 0.0008f},
+    {0.0008f, 0.0016f, 0.0032f, 0.0048f, 0.0064f, 0.0064f, 0.0048f, 0.0032f, 0.0016f, 0.0008f},
+    {0.0006f, 0.0012f, 0.0024f, 0.0036f, 0.0048f, 0.0048f, 0.0036f, 0.0024f, 0.0012f, 0.0006f},
+    {0.0004f, 0.0008f, 0.0016f, 0.0024f, 0.0032f, 0.0032f, 0.0024f, 0.0016f, 0.0008f, 0.0004f},
+    {0.0002f, 0.0004f, 0.0008f, 0.0012f, 0.0016f, 0.0016f, 0.0012f, 0.0008f, 0.0004f, 0.0002f},
+    {0.0001f, 0.0002f, 0.0004f, 0.0006f, 0.0008f, 0.0008f, 0.0006f, 0.0004f, 0.0002f, 0.0001f}
 };
 
 __global__
 void blur_kernel(unsigned char* output, unsigned char* input, int width, int height) {
     const int channels = 3;
+    const int kernel_size = 10;
+    const int kernel_radius = kernel_size / 2;
 
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -19,14 +29,14 @@ void blur_kernel(unsigned char* output, unsigned char* input, int width, int hei
         for (int c = 0; c < channels; c++) {
             float blur_value = 0.0f;
             
-            // Apply 3x3 gaussian kernel
-            for (int i = -1; i <= 1; i++) {
-                for (int j = -1; j <= 1; j++) {
+            // Apply 10x10 gaussian kernel
+            for (int i = -kernel_radius; i <= kernel_radius; i++) {
+                for (int j = -kernel_radius; j <= kernel_radius; j++) {
                     int cur_row = min(max(row + i, 0), height - 1);
                     int cur_col = min(max(col + j, 0), width - 1);
                     int input_idx = (cur_row * width + cur_col) * channels + c;
                     
-                    blur_value += (float)input[input_idx] * gaussian_kernel[i+1][j+1];
+                    blur_value += (float)input[input_idx] * gaussian_kernel[i+kernel_radius][j+kernel_radius];
                 }
             }
             
