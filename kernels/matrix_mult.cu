@@ -6,8 +6,11 @@ inline unsigned int cdiv(unsigned int a, unsigned int b) {
     return (a + b - 1) / b;
 }
 
+// Define tile size - this should be tuned based on your GPU
+#define TILE_SIZE 16
+
 __global__
-void matrix_mult_kernel(
+void matrix_mult_tiled_kernel(
     float* output,
     const float* matrix_a,
     const float* matrix_b,
@@ -15,6 +18,10 @@ void matrix_mult_kernel(
     const int k,  // cols of matrix A / rows of matrix B
     const int n   // cols of matrix B
 ) {
+    // Shared memory for tiles
+    __shared__ float tile_a[TILE_SIZE][TILE_SIZE];
+    __shared__ float tile_b[TILE_SIZE][TILE_SIZE];
+
     // Calculate global position
     int row = blockIdx.y * blockDim.y + threadIdx.y;
     int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -22,11 +29,35 @@ void matrix_mult_kernel(
     if (row < m && col < n) {
         float sum = 0.0f;
         
-        // Compute dot product for this element
-        for (int i = 0; i < k; i++) {
-            sum += matrix_a[row * k + i] * matrix_b[i * n + col];
+        // Loop over tiles
+        for (int tile = 0; tile < (k + TILE_SIZE - 1) / TILE_SIZE; tile++) {
+            // Load tile from matrix A
+            if (row < m && (tile * TILE_SIZE + threadIdx.x) < k) {
+                tile_a[threadIdx.y][threadIdx.x] = matrix_a[row * k + tile * TILE_SIZE + threadIdx.x];
+            } else {
+                tile_a[threadIdx.y][threadIdx.x] = 0.0f;
+            }
+
+            // Load tile from matrix B
+            if ((tile * TILE_SIZE + threadIdx.y) < k && col < n) {
+                tile_b[threadIdx.y][threadIdx.x] = matrix_b[(tile * TILE_SIZE + threadIdx.y) * n + col];
+            } else {
+                tile_b[threadIdx.y][threadIdx.x] = 0.0f;
+            }
+
+            // Synchronize threads to ensure tiles are loaded
+            __syncthreads();
+
+            // Compute partial sum for this tile
+            for (int i = 0; i < TILE_SIZE; i++) {
+                sum += tile_a[threadIdx.y][i] * tile_b[i][threadIdx.x];
+            }
+
+            // Synchronize threads before loading next tile
+            __syncthreads();
         }
         
+        // Write result
         output[row * n + col] = sum;
     }
 }
@@ -52,14 +83,14 @@ torch::Tensor matrix_mult(torch::Tensor matrix_a, torch::Tensor matrix_b) {
     auto result = torch::empty({m, n}, matrix_a.options());
     
     // Define block and grid dimensions
-    dim3 threads_per_block(16, 16);  // 256 threads per block
+    dim3 threads_per_block(TILE_SIZE, TILE_SIZE);  // TILE_SIZE x TILE_SIZE threads per block
     dim3 number_of_blocks(
         cdiv(n, threads_per_block.x),
         cdiv(m, threads_per_block.y)
     );
     
     // Launch kernel
-    matrix_mult_kernel<<<number_of_blocks, threads_per_block, 0, torch::cuda::getCurrentCUDAStream()>>>(
+    matrix_mult_tiled_kernel<<<number_of_blocks, threads_per_block, 0, torch::cuda::getCurrentCUDAStream()>>>(
         result.data_ptr<float>(),
         matrix_a.data_ptr<float>(),
         matrix_b.data_ptr<float>(),
